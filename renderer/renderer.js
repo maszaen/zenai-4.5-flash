@@ -10,6 +10,7 @@ let collapsed = false;
 const SESSIONS_PER_PAGE = 30;
 let loadedSessionCount = 0;
 let isAdvancedSearch = false;
+const debug_mode = (typeof window.api !== 'undefined');
 
 function showWelcomeScreen() {
   current = null;
@@ -512,7 +513,7 @@ async function send(){
     if (evt && typeof evt === 'object' && evt.error) {
       contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
       isStreaming = false; 
-      updateInputState(); 
+      updateInputState();
       controller = null; 
       return;
     }
@@ -896,9 +897,14 @@ function setupResponsiveHandlers() {
 }
 
 function st(message, duration = 10000) {
-    const container = document.getElementById('toast-container');
-    const toast = document.createElement('div');
-    toast.textContent = message;
+  if (debug_mode) { return; }
+
+  const container = document.getElementById('toast-container');
+  let toast = container.querySelector('.toast-msg'); // cek apakah sudah ada toast
+
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.className = 'toast-msg';
     toast.style.cssText = `
       background: #535353ff;
       color: #fff;
@@ -912,12 +918,21 @@ function st(message, duration = 10000) {
       transition: opacity 0.3s;
     `;
     container.appendChild(toast);
-    requestAnimationFrame(() => { toast.style.opacity = '1'; });
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.addEventListener('transitionend', () => toast.remove());
-    }, duration);
   }
+
+  // update pesan
+  toast.textContent = message;
+
+  toast.style.opacity = '0';
+  requestAnimationFrame(() => { toast.style.opacity = '1'; });
+
+  clearTimeout(toast._timeoutId);
+  toast._timeoutId = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+  }, duration);
+}
+
 
 // --- Initialization ---
 async function initializeApp() { // Tambahkan async
