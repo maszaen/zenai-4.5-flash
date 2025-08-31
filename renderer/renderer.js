@@ -24,6 +24,22 @@ function nowISO(){ return new Date().toISOString(); }
 function newSessionName(){ const d = new Date(); return `Untitled chat ${d.toTimeString().slice(0,5)}`; }
 function esc(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'", '&#39;'); }
 function estimateTokens(s){ if (!s) return 0; return Math.ceil(s.length/4); }
+const throttledHighlight = throttle((element) => {
+  if (element) Prism.highlightAllUnder(element);
+}, 20);
+
+function throttle(func, limit) {
+  let inThrottle;
+  return function() {
+    const args = arguments;
+    const context = this;
+    if (!inThrottle) {
+      func.apply(context, args);
+      inThrottle = true;
+      setTimeout(() => inThrottle = false, limit);
+    }
+  }
+}
 
 function getRelativeDateGroup(dateString) {
     const date = new Date(dateString);
@@ -60,10 +76,14 @@ function esc(s) {
 }
 
 function enhancedMarkdownParse(src) {
-    const normalizedSrc = src.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
+    let sanitizedSrc = src.trimStart();
+
+    const boldListFixRegex = /^(\s*)\*\*(\d+\.|[*-])\s+(.*?)\*\*/gm;
+    sanitizedSrc = sanitizedSrc.replace(boldListFixRegex, '$1$2 **$3**');
+
+    const normalizedSrc = sanitizedSrc.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
     const codeBlocks = [];
     
-    // Ekstrak blok kode dan beri pemisah yang jelas
     let processedSrc = normalizedSrc.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
         const placeholder = `\n__CODEBLOCK_${codeBlocks.length}__\n`;
         codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
@@ -72,75 +92,110 @@ function enhancedMarkdownParse(src) {
 
     const lines = processedSrc.split('\n');
     let html = '';
-    const listStack = []; // Stack untuk melacak nesting list: [{type, indent}]
+    const listStack = []; 
+    let paragraphBuffer = [];
 
-    const closeLists = (targetIndent) => {
-        while (listStack.length > 0 && listStack[listStack.length - 1].indent >= targetIndent) {
-            const list = listStack.pop();
-            html += `</${list.type}>`;
+    const flushParagraph = () => {
+        if (paragraphBuffer.length > 0) {
+            html += `<p>${paragraphBuffer.join('<br>')}</p>`;
+            paragraphBuffer = [];
         }
     };
 
-    for (const line of lines) {
+    const closeOpenBlocks = () => {
+        flushParagraph();
+        while (listStack.length > 0) {
+            html += `</${listStack.pop().type}>`;
+        }
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
         const trimmedLine = line.trim();
+
         if (!trimmedLine) {
-            // Baris kosong akan menutup semua list aktif
-            closeLists(0);
+            closeOpenBlocks();
             continue;
         }
 
-        const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)/);
-        const ulMatch = line.match(/^(\s*)[*-]\s+(.*)/);
         const hMatch = line.match(/^(#+)\s+(.*)/);
         const hrMatch = /^---+$/.test(trimmedLine);
-        const codeMatch = trimmedLine.startsWith('__CODEBLOCK_');
-
+        const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)/);
+        const ulMatch = line.match(/^(\s*)[*-]\s+(.*)/);
         const listMatch = olMatch || ulMatch;
+        const codeMatch = trimmedLine.startsWith('__CODEBLOCK_');
+        
+        const nextLine = lines[i + 1] ? lines[i + 1].trim() : '';
+        const isTableHeader = trimmedLine.includes('|') && !listMatch && !hMatch;
+        const isNextLineSeparator = isTableHeader && nextLine.includes('|') && nextLine.includes('-') && !/[^|:-\s]/.test(nextLine);
 
+        if (isTableHeader && isNextLineSeparator) {
+            closeOpenBlocks();
+            let tableHtml = '<div class="table-container"><table>';
+            const headers = trimmedLine.split('|').map(h => h.trim()).filter(Boolean);
+            tableHtml += '<thead><tr>';
+            for (const header of headers) {
+                tableHtml += `<th>${parseInlineMarkdown(header)}</th>`;
+            }
+            tableHtml += '</tr></thead><tbody>';
+            let tableRowIndex = i + 2;
+            while (tableRowIndex < lines.length && lines[tableRowIndex].trim().includes('|')) {
+                const cells = lines[tableRowIndex].trim().split('|').map(c => c.trim()).filter(Boolean);
+                tableHtml += '<tr>';
+                for (let j = 0; j < headers.length; j++) {
+                    const cellContent = cells[j] || '';
+                    tableHtml += `<td>${parseInlineMarkdown(cellContent)}</td>`;
+                }
+                tableHtml += '</tr>';
+                tableRowIndex++;
+            }
+            tableHtml += '</tbody></table></div>';
+            html += tableHtml;
+            i = tableRowIndex - 1;
+            continue;
+        }
+        
         if (listMatch) {
+            flushParagraph();
             const indent = listMatch[1].length;
             const type = olMatch ? 'ol' : 'ul';
             const number = olMatch ? parseInt(olMatch[2], 10) : null;
             const content = olMatch ? olMatch[3] : ulMatch[2];
             
-            // Tutup list level lebih dalam jika indentasi berkurang
-            closeLists(indent);
+            while (listStack.length > 0 && listStack[listStack.length - 1].indent >= indent) {
+                html += `</${listStack.pop().type}>`;
+            }
             
             const lastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
-
-            // Buka list baru jika ini list pertama, atau indentasi bertambah, atau tipe list berubah
             if (!lastList || indent > lastList.indent || type !== lastList.type) {
                 const startAttr = (type === 'ol' && number > 1) ? ` start="${number}"` : '';
                 html += `<${type}${startAttr}>`;
                 listStack.push({ type, indent });
             }
-            
-            let liClass = '';
-            if (type === 'ol' && (content.trim().startsWith('**') || content.trim().startsWith('__'))) {
-                liClass = ' class="bold-marker-item"';
-            }
-            // Tambahkan class ke tag <li> jika kondisi terpenuhi.
-            html += `<li${liClass}>${parseInlineMarkdown(content)}</li>`;
-            
-
-        } else {
-            // Baris ini bukan list item, tutup semua list yang aktif.
-            closeLists(0);
-            
+            html += `<li>${parseInlineMarkdown(content)}</li>`;
+        
+        } else if (hMatch || hrMatch || codeMatch) {
+            closeOpenBlocks();
             if (hMatch) {
-                const level = hMatch[1].length;
-                html += `<h${level}>${parseInlineMarkdown(hMatch[2])}</h${level}>`;
+                html += `<h${hMatch[1].length}>${parseInlineMarkdown(hMatch[2])}</h${hMatch[1].length}>`;
             } else if (hrMatch) {
                 html += '<hr>';
             } else if (codeMatch) {
-                html += trimmedLine; // Placeholder akan direplace nanti
+                html += trimmedLine;
+            }
+        } else {
+             if (listStack.length > 0) {
+                const lastLiPos = html.lastIndexOf('</li>');
+                if (lastLiPos !== -1) {
+                    html = `${html.substring(0, lastLiPos)}<br>${parseInlineMarkdown(line.trim())}</li>`;
+                }
             } else {
-                html += `<p>${parseInlineMarkdown(line)}</p>`;
+                paragraphBuffer.push(parseInlineMarkdown(line));
             }
         }
     }
 
-    closeLists(0); // Tutup semua list yang tersisa di akhir
+    closeOpenBlocks(); 
 
     let finalHtml = html;
     finalHtml = codeBlocks.reduce((acc, block, i) => {
@@ -150,32 +205,46 @@ function enhancedMarkdownParse(src) {
     return finalHtml;
 }
 
+
 function parseInlineMarkdown(text) {
     if (!text) return '';
+
+    let html = esc(text);
+
+    html = html.replace(/&lt;u&gt;(.*?)&lt;\/u&gt;/g, '<u>$1</u>');
+
+    const inlineCodeBlocks = [];
+    html = html.replace(/`([^`]+?)`/g, (match, content) => {
+        const placeholder = `__INLINE_CODE_${inlineCodeBlocks.length}__`;
+        inlineCodeBlocks.push(`<code>${content}</code>`);
+        return placeholder;
+    });
+
+    const linkRegex = /(\b(https?:\/\/|www\.)[^\s<>"'()]+|[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}(\/[^\s<>"'()]*)*)/g;
+    html = html.replace(linkRegex, (url) => {
+        let href = url;
+        if (!/^https?:\/\//i.test(href)) {
+            href = 'https://' + href;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+    });
+
+    html = inlineCodeBlocks.reduce((acc, block, i) => {
+        return acc.replace(`__INLINE_CODE_${i}__`, block);
+    }, html);
     
-    // FIXED: Simple, direct approach - no placeholders, no escaping conflicts
-    let out = text;
+    html = html.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    html = html.replace(/___(.*?)___/g, '<strong><em>$1</em></strong>');
 
-    // 1. Inline code first (protect from other formatting)
-    out = out.replace(/`([^`]+?)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
 
-    // 2. Bold and italic - handle nesting properly
-    // Triple first: ***text*** = bold + italic
-    out = out.replace(/\*\*\*(.*?)\*\*\*/g, '<strong><em>$1</em></strong>');
-    out = out.replace(/___(.*)___/g, '<strong><em>$1</em></strong>');
-    
-    // Double: **text** = bold
-    out = out.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    out = out.replace(/__(.*?)__/g, '<strong>$1</strong>');
-    
-    // Single: *text* = italic
-    out = out.replace(/\*(.*?)\*/g, '<em>$1</em>');
-    out = out.replace(/_(.*?)_/g, '<em>$1</em>');
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
 
-    // 3. Strikethrough
-    out = out.replace(/~~(.*?)~~/g, '<del>$1</del>');
+    html = html.replace(/~~(.*?)~~/g, '<del>$1</del>');
 
-    return out;
+    return html;
 }
 
 function md(src) {
@@ -202,7 +271,7 @@ function personaSystem(){
   const instructions = [];
   if (name) instructions.push(`The user's name is ${name}. Address them by their name when appropriate.`);
   if (work) instructions.push(`The user works as a ${work}. Keep this professional context in mind when providing assistance.`);
-  if (prefs) instructions.push(`User preferences: ${prefs}`);
+  if (prefs) instructions.push(`User preferences: ${prefs}, `);
 
   if (instructions.length > 0) {
     prompt += '\n\n--- USER PERSONALIZATION ---\n' + instructions.join('\n');
@@ -228,7 +297,7 @@ function renderSessions() {
   let filteredSessions = state.sessions;
   if (filter) {
     filteredSessions = state.sessions.filter(s => {
-      if (s.name === null) return true; // Always show loading placeholder during search
+      if (s.name === null) return true;
       const nameMatch = s.name.toLowerCase().includes(filter);
       if (isAdvancedSearch) {
         const contentMatch = s.messages.some(msg => msg[1].toLowerCase().includes(filter));
@@ -294,7 +363,7 @@ function updateChatHeader() {
     $('#chat-tokens').textContent = `${tokenCount > 0 ? tokenCount : 'No'} tokens used`;
   } else {
     $('#chat-title').textContent = 'ZenAI 4.5 Flash';
-    $('#chat-tokens').textContent = 'Talk whatever you want without any charge';
+    $('#chat-tokens').textContent = 'Talk whatever you want';
   }
 }
 
@@ -303,11 +372,9 @@ function addMessage(role, content, {final=false}={}){
   const node = document.createElement('div');
   node.className = `message ${role}`;
 
-  // Definisikan SVG untuk tombol Salin & ikon Ceklis
   const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
   const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
   
-  // Template tombol salin
   const copyButtonHTML = `
     <div class="message-actions">
       <button class="copy-btn" title="Copy text">
@@ -326,7 +393,6 @@ function addMessage(role, content, {final=false}={}){
   
   log.appendChild(node);
   
-  // Tambahkan event listener untuk tombol salin jika ada
   const copyBtn = node.querySelector('.copy-btn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
@@ -354,9 +420,11 @@ function renderHistory(){
   current.messages.forEach(([role, content]) => {
     addMessage(role, content, {final: true});
   });
+  Prism.highlightAll();
 }
 
 function setCurrent(s){ 
+  if (current === s) return;
   current = s; 
   ensureSeed(current); 
   $('.chat-area').classList.remove('welcome-active');
@@ -436,7 +504,8 @@ async function send(){
       current.tokens_used = (current.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
       isStreaming = false; 
       updateInputState(); 
-      controller = null; 
+      controller = null;
+      Prism.highlightAllUnder(contentDiv); 
       save();
       return;
     }
@@ -450,6 +519,7 @@ async function send(){
     const token = String(evt); 
     fullResponse += token; 
     contentDiv.innerHTML = md(fullResponse);
+    throttledHighlight(contentDiv);
     $('#chat-log').scrollTop = $('#chat-log').scrollHeight;
   };
 
@@ -497,7 +567,6 @@ async function recoverUntitledSessions() {
         st("title requested", 6000)
         if (suggestedTitle) newTitle = suggestedTitle;
       } else {
-        // Logika demo untuk recovery, agar tetap berfungsi tanpa window.api
         const words = context.split(' ').slice(0, 3).join(' ');
         newTitle = `(recovered) ${words}...`;
       }
@@ -702,6 +771,11 @@ function setupMobileSidebar() {
   const newBtn = toggleBtn.cloneNode(true);
   toggleBtn.parentNode.replaceChild(newBtn, toggleBtn);
   newBtn.addEventListener('click', handleSidebarToggle);
+
+  const toggleBtn2 = $('#toggle-sidebar-2');
+  const newBtn2 = toggleBtn2.cloneNode(true);
+  toggleBtn2.parentNode.replaceChild(newBtn2, toggleBtn2);
+  newBtn2.addEventListener('click', handleSidebarToggle);
 }
 
 function setupTextareaResize() {
