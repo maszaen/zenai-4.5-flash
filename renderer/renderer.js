@@ -59,170 +59,90 @@ function esc(s) {
     .replaceAll("'", '&#39;');
 }
 
-function handleCleanLists(text) {
-    const lines = text.split('\n');
-    let result = '';
-    const stack = []; // Melacak jenis list ('ul'/'ol') dan indentasinya
-
-    const itemRegex = /^(\s*)([*-]|\d+\.)\s+(.*)/;
-
-    for (const line of lines) {
-        // Baris kosong diabaikan agar tidak memutus list
-        if (!line.trim()) continue;
-
-        const match = line.match(itemRegex);
-
-        if (match) {
-            // KEEP ORIGINAL LOGIC - ini udah benar untuk nested lists
-            const indent = match[1].length;
-            const marker = match[2];
-            const content = match[3];
-            const type = /[*-]/.test(marker) ? 'ul' : 'ol';
-
-            while (stack.length > 0 && indent < stack[stack.length - 1].indent) {
-                const prev = stack.pop();
-                result += `</${prev.type}>`;
-            }
-
-            if (stack.length === 0 || indent > stack[stack.length - 1].indent) {
-                stack.push({ type, indent });
-                result += `<${type}>`;
-            } else if (type !== stack[stack.length - 1].type) {
-                const prev = stack.pop();
-                result += `</${prev.type}>`;
-                stack.push({ type, indent });
-                result += `<${type}>`;
-            }
-
-            result += `<li>${parseInlineMarkdown(content)}</li>`;
-        } else {
-            // KEEP ORIGINAL LOGIC - ini juga udah benar
-            const currentIndent = line.match(/^\s*/)[0].length;
-
-            if (stack.length > 0 && currentIndent > stack[stack.length - 1].indent) {
-                result += line;
-            } else {
-                while (stack.length > 0) {
-                    const prev = stack.pop();
-                    result += `</${prev.type}>`;
-                }
-                result += line + '\n';
-            }
-        }
-    }
-
-    // Tutup semua sisa list di stack di akhir proses
-    while (stack.length > 0) {
-        const prev = stack.pop();
-        result += `</${prev.type}>`;
-    }
-
-    return result.trim();
-}
-
 function enhancedMarkdownParse(src) {
-    const normalizedSrc = src.replace(/\u00A0/g, ' ');
+    const normalizedSrc = src.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
     const codeBlocks = [];
+    
+    // Ekstrak blok kode dan beri pemisah yang jelas
     let processedSrc = normalizedSrc.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-        const placeholder = `\n\n__CODEBLOCK_${codeBlocks.length}__\n\n`; // <-- PERUBAHAN DI SINI
+        const placeholder = `\n__CODEBLOCK_${codeBlocks.length}__\n`;
         codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
         return placeholder;
     });
 
-    const blocks = processedSrc.trim().split(/\n\n+/);
+    const lines = processedSrc.split('\n');
+    let html = '';
+    const listStack = []; // Stack untuk melacak nesting list: [{type, indent}]
 
-    const htmlBlocks = blocks.map(block => {
-        let trimmedBlock = block.trim();
-        if (!trimmedBlock) return '';
-        let resultHtml = '';
-        const lines = trimmedBlock.split('\n');
-        const firstLine = lines[0].trim();
+    const closeLists = (targetIndent) => {
+        while (listStack.length > 0 && listStack[listStack.length - 1].indent >= targetIndent) {
+            const list = listStack.pop();
+            html += `</${list.type}>`;
+        }
+    };
 
-        // Handle headers first
-        if (firstLine.startsWith('#')) {
-            const level = firstLine.match(/^#+/)[0].length;
-            if (level <= 6) {
-                resultHtml += `<h${level}>${parseInlineMarkdown(firstLine.replace(/^#+\s*/, ''))}</h${level}>`;
-                lines.shift();
-                trimmedBlock = lines.join('\n').trim();
-                if (!trimmedBlock) return resultHtml;
+    for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine) {
+            // Baris kosong akan menutup semua list aktif
+            closeLists(0);
+            continue;
+        }
+
+        const olMatch = line.match(/^(\s*)(\d+)\.\s+(.*)/);
+        const ulMatch = line.match(/^(\s*)[*-]\s+(.*)/);
+        const hMatch = line.match(/^(#+)\s+(.*)/);
+        const hrMatch = /^---+$/.test(trimmedLine);
+        const codeMatch = trimmedLine.startsWith('__CODEBLOCK_');
+
+        const listMatch = olMatch || ulMatch;
+
+        if (listMatch) {
+            const indent = listMatch[1].length;
+            const type = olMatch ? 'ol' : 'ul';
+            const number = olMatch ? parseInt(olMatch[2], 10) : null;
+            const content = olMatch ? olMatch[3] : ulMatch[2];
+            
+            // Tutup list level lebih dalam jika indentasi berkurang
+            closeLists(indent);
+            
+            const lastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
+
+            // Buka list baru jika ini list pertama, atau indentasi bertambah, atau tipe list berubah
+            if (!lastList || indent > lastList.indent || type !== lastList.type) {
+                const startAttr = (type === 'ol' && number > 1) ? ` start="${number}"` : '';
+                html += `<${type}${startAttr}>`;
+                listStack.push({ type, indent });
+            }
+            
+            let liClass = '';
+            if (type === 'ol' && (content.trim().startsWith('**') || content.trim().startsWith('__'))) {
+                liClass = ' class="bold-marker-item"';
+            }
+            // Tambahkan class ke tag <li> jika kondisi terpenuhi.
+            html += `<li${liClass}>${parseInlineMarkdown(content)}</li>`;
+            
+
+        } else {
+            // Baris ini bukan list item, tutup semua list yang aktif.
+            closeLists(0);
+            
+            if (hMatch) {
+                const level = hMatch[1].length;
+                html += `<h${level}>${parseInlineMarkdown(hMatch[2])}</h${level}>`;
+            } else if (hrMatch) {
+                html += '<hr>';
+            } else if (codeMatch) {
+                html += trimmedLine; // Placeholder akan direplace nanti
+            } else {
+                html += `<p>${parseInlineMarkdown(line)}</p>`;
             }
         }
-        
-        // Handle code blocks
-        if (trimmedBlock.startsWith('__CODEBLOCK_')) {
-            return trimmedBlock;
-        } 
-        // Handle horizontal rules
-        else if (/^---+$/.test(trimmedBlock.trim())) {
-            return '<hr>';
-        }
-        
-        // NEW STRATEGY: Check if ANY line in block contains list markers
-        const hasListMarkers = lines.some(line => /^(\s*)([*-]|\d+\.)\s+/.test(line));
-        
-        if (hasListMarkers) {
-            // FIXED: Better mixed content processing that preserves consecutive numbering
-            let sections = [];
-            let currentSection = { type: 'text', content: [] };
-            
-            for (let i = 0; i < lines.length; i++) {
-                const line = lines[i];
-                const isListItem = /^(\s*)([*-]|\d+\.)\s+/.test(line);
-                const isIndentedContent = /^\s+/.test(line) && line.trim();
-                const isEmpty = !line.trim();
-                
-                if (isListItem) {
-                    // Switch to list section
-                    if (currentSection.type !== 'list') {
-                        if (currentSection.content.length > 0) {
-                            sections.push(currentSection);
-                        }
-                        currentSection = { type: 'list', content: [line] };
-                    } else {
-                        currentSection.content.push(line);
-                    }
-                } else if (currentSection.type === 'list' && (isIndentedContent || isEmpty)) {
-                    // Continue list section (indented content or empty lines)
-                    currentSection.content.push(line);
-                } else if (line.trim()) {
-                    // Switch to text section  
-                    if (currentSection.type !== 'text') {
-                        if (currentSection.content.length > 0) {
-                            sections.push(currentSection);
-                        }
-                        currentSection = { type: 'text', content: [line] };
-                    } else {
-                        currentSection.content.push(line);
-                    }
-                }
-                // Empty lines are handled by the context above
-            }
-            
-            // Add final section
-            if (currentSection.content.length > 0) {
-                sections.push(currentSection);
-            }
-            
-            // Process sections
-            for (const section of sections) {
-                if (section.type === 'list') {
-                    resultHtml += handleCleanLists(section.content.join('\n'));
-                } else {
-                    resultHtml += `<p>${parseInlineMarkdown(section.content.join('\n')).replace(/\n/g, '<br>')}</p>`;
-                }
-            }
-            
-            return resultHtml;
-        } 
-        // Pure paragraph content
-        else {
-            return resultHtml + `<p>${parseInlineMarkdown(trimmedBlock).replace(/\n/g, '<br>')}</p>`;
-        }
-    });
+    }
 
-    let finalHtml = htmlBlocks.join('');
+    closeLists(0); // Tutup semua list yang tersisa di akhir
 
+    let finalHtml = html;
     finalHtml = codeBlocks.reduce((acc, block, i) => {
         return acc.replace(`__CODEBLOCK_${i}__`, block);
     }, finalHtml);
@@ -258,25 +178,11 @@ function parseInlineMarkdown(text) {
     return out;
 }
 
-// Fungsi utama untuk dipanggil
 function md(src) {
   if (!src) return '';
   
   const cleanSrc = src.trim();
 
-  // Prioritaskan menggunakan library 'marked' jika ada
-  if (typeof marked !== 'undefined') {
-    marked.setOptions({
-      breaks: true,
-      gfm: true,
-      headerIds: false,
-      mangle: false
-    });
-    return marked.parse(cleanSrc);
-  }
-
-  // Jika 'marked' gagal load, gunakan fallback parser kustom yang sudah diperbaiki
-  console.warn("Peringatan: Library 'marked.js' tidak ditemukan. Menggunakan fallback parser.");
   return enhancedMarkdownParse(cleanSrc);
 }
 

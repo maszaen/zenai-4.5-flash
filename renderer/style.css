@@ -1227,6 +1227,10 @@ input:checked + .slider:before {
   gap: var(--spacing-md);
 }
 
+li.bold-marker-item::marker {
+    font-weight: bold;
+}
+
 #app.sidebar-collapsed .primary-btn span,
 #app.sidebar-collapsed .icon-btn2 span,
 #app.sidebar-collapsed .settings-btn span,
