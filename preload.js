@@ -25,7 +25,7 @@ contextBridge.exposeInMainWorld('api', {
     },
     titleSuggest: (text, model='glm-4.5-flash') => ipcRenderer.invoke('chat:title', { text, model })
   },
-  window: { // API baru untuk kontrol window
+  window: {
     minimize: () => ipcRenderer.send('window:minimize'),
     maximize: () => ipcRenderer.send('window:maximize'),
     close: () => ipcRenderer.send('window:close'),

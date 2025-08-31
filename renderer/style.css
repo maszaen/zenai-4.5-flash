@@ -241,7 +241,7 @@ html, body {
 
 /* Search Container */
 .search-container {
-  margin: 0 0 var(--spacing-lg) 0;
+  margin: 0 0 var(--spacing-xs) 0;
   position: relative;
 }
 
@@ -312,7 +312,7 @@ html, body {
   flex-direction: column;
   overflow: auto;
   height: 100%;
-  max-height: calc(100vh - 185px);
+  max-height: calc(100vh - 163px);
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -667,10 +667,6 @@ input:checked + .slider:before {
   transform: translateY(150%);
 }
 
-.message-content {
-  position: relative;
-}
-
 .message-actions {
   position: absolute;
   bottom: -10px;
@@ -884,6 +880,7 @@ input:checked + .slider:before {
 .message-content {
   flex: 1;
   min-width: 0;
+  position: relative;
 }
 
 .message-text {
@@ -893,11 +890,12 @@ input:checked + .slider:before {
   line-height: 1.6;
   word-wrap: break-word;
   transition: var(--transition-fast);
+  min-width: 0;
 }
 
 .message.user .message-text {
-  background: var(--bubble-user);
-  color: white;
+  background: var(--bubble-ai); 
+  color: black;
   border-top-right-radius: var(--spacing-xs);
   border: 1px solid var(--border-light);
 }
@@ -958,6 +956,7 @@ input:checked + .slider:before {
 .input-container {
   display: flex;
   align-items: flex-end;
+  min-width: 0;
   max-width: 800px;
   justify-content: center;
   margin: 0 auto;
@@ -1293,17 +1292,18 @@ input:checked + .slider:before {
 }
 
 .message-text pre {
+  max-width: 100%; /* Tetap pertahankan ini */
+  overflow-x: auto; /* Tetap pertahankan ini */
+  /* Properti lain bisa tetap sama */
   background: var(--surface-secondary);
   padding: var(--spacing-lg);
   border-radius: var(--radius-lg);
-  overflow-x: auto;
   margin: var(--spacing-lg) 0;
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
   border: 1px solid var(--border);
 }
-
 .message-text ul,
 .message-text ol {
   margin: var(--spacing-md) 0;

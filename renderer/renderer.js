@@ -124,7 +124,7 @@ function enhancedMarkdownParse(src) {
     const normalizedSrc = src.replace(/\u00A0/g, ' ');
     const codeBlocks = [];
     let processedSrc = normalizedSrc.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-        const placeholder = `__CODEBLOCK_${codeBlocks.length}__`;
+        const placeholder = `\n\n__CODEBLOCK_${codeBlocks.length}__\n\n`; // <-- PERUBAHAN DI SINI
         codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
         return placeholder;
     });
@@ -915,16 +915,16 @@ function setupResponsiveHandlers() {
   });
 }
 
-function st(message, duration = 30000) {
+function st(message, duration = 10000) {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.textContent = message;
     toast.style.cssText = `
-      background: #222;
+      background: #535353ff;
       color: #fff;
-      padding: 12px 20px;
-      margin-top: 8px;
-      border-radius: 6px;
+      padding: 5px 15px;
+      margin-top: 5px;
+      border-radius: 7px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.15);
       font-size: 15px;
       pointer-events: auto;

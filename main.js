@@ -16,7 +16,6 @@ function createWindow(){
     }
   });
 
-  // Event handlers untuk kontrol window dari renderer
   ipcMain.on('window:minimize', () => win.minimize());
   ipcMain.on('window:maximize', () => {
     if (win.isMaximized()) win.unmaximize();
@@ -42,7 +41,6 @@ ipcMain.handle('sessions:load', async () => {
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) return { sessions: parsed, settings: { persona: {} } }; // legacy
     if (parsed && typeof parsed === 'object') {
-        // Migrasi dari persona string ke object jika diperlukan
         if (typeof parsed.settings.persona === 'string') {
             parsed.settings.persona = { name: '', work: '', preferences: parsed.settings.persona };
         }
@@ -72,7 +70,6 @@ function joinEndpoint(base, p){
 }
 
 // ---------- Streaming from MAIN (SSE) ----------
-// ... (Kode streaming tidak berubah)
 const activeStreams = new Map(); // id -> req
 ipcMain.on('chat:stream-start', (event, payload) => {
   const reqId = payload.reqId;
