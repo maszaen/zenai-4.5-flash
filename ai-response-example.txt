@@ -1,0 +1,106 @@
+### Perbandingan Kode Go vs Java - Contoh Sederhana
+
+**Go (Golang) - Struktur Data & Function**  
+```go
+package main
+
+import "fmt"
+
+// Struct sederhana untuk merepresentasikan orang
+type Person struct {
+    Name string
+    Age  int
+}
+
+// Function untuk print detail orang
+func PrintPerson(p Person) {
+    fmt.Printf("Nama: %s, Umur: %d tahun\n", p.Name, p.Age)
+}
+
+func main() {
+    // Inisialisasi objek
+    person := Person{
+        Name: "Zaen",
+        Age:  28,
+    }
+    
+    // Panggil function
+    PrintPerson(person)
+}
+```
+
+**Java - Class & Method**  
+```java
+public class Person {
+    private String name;
+    private int age;
+
+    // Constructor
+    public Person(String name, int age) {
+        this.name = name;
+        this.age = age;
+    }
+
+    // Method untuk print detail
+    public void printPerson() {
+        System.out.println("Nama: " + name + ", Umur: " + age + " tahun");
+    }
+
+    public static void main(String[] args) {
+        // Inisialisasi objek
+        Person person = new Person("Zaen", 28);
+        
+        // Panggil method
+        person.printPerson();
+    }
+}
+```
+
+### Perbandingan Utama:
+
+1. **Struktur Kode**  
+   - **Go**: Minimal boilerplate, langsung pakai `package main` dan `func main()`.  
+   - **Java**: Harus punya class wrapper dan `main` static di dalam class.
+
+2. **Pembuatan Objek**  
+   - **Go**:  
+     ```go
+     person := Person{Name: "Zaen", Age: 28}
+     ```
+   - **Java**:  
+     ```java
+     Person person = new Person("Zaen", 28);
+     ```
+
+3. **Access Modifier**  
+   - **Go**: Semua field otomatis public (tanpa keyword).  
+   - **Java**: Perlu `private`/`public` (default `package-private`).
+
+4. **Function vs Method**  
+   - **Go**: Function bisa standalone atau method (dengan receiver).  
+   - **Java**: Method harus terikat ke class.
+
+5. **Error Handling**  
+   - **Go**: Explicit dengan error return (`err`):  
+     ```go
+     result, err := someFunction()
+     if err != nil { ... }
+     ```
+   - **Java**: Exception handling dengan `try-catch`.
+
+6. **Concurrency**  
+   - **Go**: Built-in goroutine & channel:  
+     ```go
+     go func() { ... }()
+     ```
+   - **Java**: Pakai `Thread` atau `CompletableFuture`.
+
+### Output Keduanya:
+```
+Nama: Zaen, Umur: 28 tahun
+```
+
+### Kesimpulan Zaen:
+- **Go**: Lebih simpel, cocok buat microservices & concurrent apps.  
+- **Java**: Lebih rigid tapi powerful untuk enterprise apps.  
+- Buat software engineer kayak lu, Go lebih "gaul" karena kode pendek, Java lebih formal. Pilih sesuai kebutuhan project! 😎
