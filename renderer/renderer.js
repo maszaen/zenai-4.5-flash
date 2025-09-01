@@ -23,24 +23,80 @@ function showWelcomeScreen() {
 // --- Utils ---
 function nowISO(){ return new Date().toISOString(); }
 function newSessionName(){ const d = new Date(); return `Untitled chat ${d.toTimeString().slice(0,5)}`; }
+function formatUserMessage(content) {
+  const escaped = esc(content);
+  return escaped.replace(/\n/g, '<br/>');
+}
 function esc(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'", '&#39;'); }
 function estimateTokens(s){ if (!s) return 0; return Math.ceil(s.length/4); }
-const throttledHighlight = throttle((element) => {
-  if (element) Prism.highlightAllUnder(element);
-}, 20);
 
-function throttle(func, limit) {
-  let inThrottle;
-  return function() {
-    const args = arguments;
-    const context = this;
-    if (!inThrottle) {
-      func.apply(context, args);
-      inThrottle = true;
-      setTimeout(() => inThrottle = false, limit);
-    }
+const welcomeMessages = [
+  "Ready when you are. What's up?",
+  "Let's untangle this. Where to start?",
+  "Problem to solve, or idea to explore?",
+  "Alright, let's dive in. Topic today?",
+  "I'm all ears. Tell me.",
+  "What's that idea stuck in your head?",
+  "Need clarity or a spark?",
+  "No idea's too small. Share it.",
+  "Let's act on it. What's our quest?",
+  "Your thoughts, my focus. Go.",
+  "What's one thing to move forward?",
+  "Ready to build? Start me off.",
+  "Lay it on me. What's the challenge?",
+  "Let's find a breakthrough. Thoughts?",
+  "Circuits buzzing. What create today?",
+  "How can I help right now?"
+];
+
+// Helper baru: cari elemen scroller chat yang bener
+function getChatScroller() {
+  const log = document.getElementById('chat-log');
+  if (!log) return null;
+
+  // Kalau #chat-log sendiri scrollable, pakai itu
+  const style = getComputedStyle(log);
+  const overY = style.overflowY;
+  if (log.scrollHeight > log.clientHeight && (overY === 'auto' || overY === 'scroll')) {
+    return log;
   }
+
+  // Fallback: cari parent yang scrollable
+  let el = log.parentElement;
+  while (el && el !== document.body) {
+    const st = getComputedStyle(el);
+    const oy = st.overflowY;
+    if (el.scrollHeight > el.clientHeight && (oy === 'auto' || oy === 'scroll')) {
+      return el;
+    }
+    el = el.parentElement;
+  }
+
+  // Last resort: tetap pakai #chat-log
+  return log;
 }
+
+// Helper baru: cek apakah user masih "nempel" bawah (threshold px)
+function isNearBottom(el, threshold = 48) {
+  if (!el) return true;
+  return (el.scrollTop + el.clientHeight) >= (el.scrollHeight - threshold);
+}
+
+// Helper baru: scroll ke bawah dengan rAF ganda biar nunggu layout+highlight selesai
+function scrollToBottom({ force = false } = {}) {
+  const scroller = getChatScroller();
+  if (!scroller) return;
+
+  const shouldScroll = force || isNearBottom(scroller);
+  if (!shouldScroll) return;
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight;
+    });
+  });
+}
+
 
 function getRelativeDateGroup(dateString) {
     const date = new Date(dateString);
@@ -65,7 +121,7 @@ function getRelativeDateGroup(dateString) {
     return date.toLocaleString('en-US', { month: 'long', year: 'numeric' });
 }
 
-// --- Minimal Markdown Parser ---
+// --- Enhanced Markdown Parser with Real-time Code Block Detection ---
 function esc(s) {
   if (!s) return '';
   return s.toString()
@@ -85,9 +141,16 @@ function enhancedMarkdownParse(src) {
     const normalizedSrc = sanitizedSrc.replace(/\u00A0/g, ' ').replace(/\r\n/g, '\n');
     const codeBlocks = [];
     
-    let processedSrc = normalizedSrc.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    let processedSrc = normalizedSrc.replace(/```(\w*)\n?([\s\S]*?)(?:```|$)/g, (match, lang, code, offset, string) => {
         const placeholder = `\n__CODEBLOCK_${codeBlocks.length}__\n`;
-        codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(code.trim())}</code></pre>`);
+        const isComplete = match.endsWith('```');
+        const codeContent = code.trim();
+        
+        if (isComplete) {
+            codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(codeContent)}</code></pre>`);
+        } else {
+            codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(codeContent)}</code></pre>`);
+        }
         return placeholder;
     });
 
@@ -158,20 +221,46 @@ function enhancedMarkdownParse(src) {
         
         if (listMatch) {
             flushParagraph();
-            const indent = listMatch[1].length;
+            let indent = listMatch[1].length;
             const type = olMatch ? 'ol' : 'ul';
             const number = olMatch ? parseInt(olMatch[2], 10) : null;
-            const content = olMatch ? olMatch[3] : ulMatch[2];
+            const content = olMatch ? listMatch[3] : ulMatch[2];
+            const lastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
             
-            while (listStack.length > 0 && listStack[listStack.length - 1].indent >= indent) {
+            // --- [PERBAIKAN LOGIKA IMPLISIT] ---
+            // Cek apakah kita harus melanjutkan sebuah list implisit yang sudah ada.
+            if (type === 'ul' && lastList && lastList.type === 'ul' && lastList.implicit && indent < lastList.indent) {
+                // Jika ya, paksa indentasi item ini agar sama dengan level list implisit.
+                // Ini mencegah parser menutup list karena dianggap de-indentasi.
+                indent = lastList.indent;
+            
+            // Cek apakah kita harus memulai sebuah list implisit baru.
+            } else if (type === 'ul' && lastList && lastList.type === 'ol' && indent <= lastList.indent) {
+                // Naikkan indentasi secara virtual untuk memaksa nesting.
+                indent = lastList.indent + 2;
+            }
+
+            while (listStack.length > 0 && 
+                    (listStack[listStack.length - 1].indent > indent || 
+                    (listStack[listStack.length - 1].indent === indent && listStack[listStack.length - 1].type !== type))) {
                 html += `</${listStack.pop().type}>`;
             }
             
-            const lastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
-            if (!lastList || indent > lastList.indent || type !== lastList.type) {
+            const currentLastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
+            
+            if (!currentLastList || indent > currentLastList.indent || type !== currentLastList.type) {
+                if (currentLastList && indent > currentLastList.indent) {
+                    const lastLiPos = html.lastIndexOf('</li>');
+                    if (lastLiPos !== -1) {
+                        html = html.substring(0, lastLiPos);
+                    }
+                }
+                
+                const isImplicit = (type === 'ul' && currentLastList && currentLastList.type === 'ol');
+
                 const startAttr = (type === 'ol' && number > 1) ? ` start="${number}"` : '';
                 html += `<${type}${startAttr}>`;
-                listStack.push({ type, indent });
+                listStack.push({ type, indent, implicit: isImplicit });
             }
             html += `<li>${parseInlineMarkdown(content)}</li>`;
         
@@ -185,7 +274,7 @@ function enhancedMarkdownParse(src) {
                 html += trimmedLine;
             }
         } else {
-             if (listStack.length > 0) {
+            if (listStack.length > 0) {
                 const lastLiPos = html.lastIndexOf('</li>');
                 if (lastLiPos !== -1) {
                     html = `${html.substring(0, lastLiPos)}<br>${parseInlineMarkdown(line.trim())}</li>`;
@@ -205,8 +294,6 @@ function enhancedMarkdownParse(src) {
 
     return finalHtml;
 }
-
-
 function parseInlineMarkdown(text) {
     if (!text) return '';
 
@@ -250,13 +337,38 @@ function parseInlineMarkdown(text) {
 
 function md(src) {
   if (!src) return '';
-  
   const cleanSrc = src.trim();
-
   return enhancedMarkdownParse(cleanSrc);
 }
 
+// --- Typewriter Animation for Welcome Message ---
+function typewriterEffect(element, text, { speed = 30, punctuationDelay = 350 } = {}) {
+  element.textContent = '';
+  let i = 0;
+  // Kumpulan karakter yang akan memicu jeda tambahan
+  const punctuation = '.,?!;:-–';
 
+  function type() {
+    if (i < text.length) {
+      const char = text.charAt(i);
+      element.textContent += char;
+      i++;
+
+      // Tentukan durasi jeda untuk karakter berikutnya
+      let delay = speed + Math.random() * 40;
+
+      // Jika karakter yang baru saja diketik adalah tanda baca, tambahkan jeda ekstra
+      if (punctuation.includes(char)) {
+        delay += punctuationDelay;
+      }
+      
+      setTimeout(type, delay);
+    }
+  }
+  
+  // Jeda awal sebelum mulai mengetik
+  setTimeout(type, 100);
+}
 
 // --- App Logic ---
 function ensureSeed(s){
@@ -339,7 +451,7 @@ function renderSessions() {
         <span class="tokens"></span>
         <span class="menu">
           <button title="Delete Session">
-            <svg xmlns="http://www.w.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <svg xmlns="[http://www.w3.org/2000/svg](http://www.w3.org/2000/svg)" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </span>
       </div>
@@ -368,14 +480,14 @@ function updateChatHeader() {
   }
 }
 
-function addMessage(role, content, {final=false}={}){
+function addMessage(role, content, {final=false}={}) {
   const log = $('#chat-log');
   const node = document.createElement('div');
   node.className = `message ${role}`;
 
   const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
   const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
-  
+
   const copyButtonHTML = `
     <div class="message-actions">
       <button class="copy-btn" title="Copy text">
@@ -383,17 +495,30 @@ function addMessage(role, content, {final=false}={}){
       </button>
     </div>
   `;
-  
+
   if (role === 'user') {
-    node.innerHTML = `<div class="message-row"><div class="message-content"><div class="message-text">${md(content)}</div>${copyButtonHTML}</div></div>`;
+    node.innerHTML = `<div class="message-row"><div class="message-content"><div class="message-text">${formatUserMessage(content)}</div>${copyButtonHTML}</div></div>`;
   } else {
     const aiAvatar = `<div class="ai-avatar"><img src="../public/images/logo-chat.svg" alt="ZenAI Logo"></div>`;
     const thinkingIndicator = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
     node.innerHTML = `<div class="message-row">${aiAvatar}<div class="message-content"><div class="message-text">${final ? md(content) : thinkingIndicator}</div>${final ? copyButtonHTML : ''}</div></div>`;
+
+    if (role === 'ai') {
+      node.style.opacity = '0';
+      node.style.transform = 'translateY(20px)';
+    }
   }
-  
+
   log.appendChild(node);
-  
+
+  if (role === 'ai') {
+    requestAnimationFrame(() => {
+      node.style.transition = 'opacity 0.4s ease-out, transform 0.4s ease-out';
+      node.style.opacity = '1';
+      node.style.transform = 'translateY(0)';
+    });
+  }
+
   const copyBtn = node.querySelector('.copy-btn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
@@ -410,18 +535,106 @@ function addMessage(role, content, {final=false}={}){
     });
   }
 
-  log.scrollTop = log.scrollHeight;
+  // Dulu: log.scrollTop = log.scrollHeight (raw) :contentReference[oaicite:4]{index=4}
+  scrollToBottom({ force: true });
   return node;
 }
 
+
 function clearLog(){ $('#chat-log').innerHTML=''; }
-function renderHistory(){
-  clearLog(); 
+function renderHistory() {
+  clearLog();
   if (!current || !current.messages) return;
+
   current.messages.forEach(([role, content]) => {
-    addMessage(role, content, {final: true});
+    addMessage(role, content, { final: true });
   });
+
+  // Dulu: Prism.highlightAll(); lalu langsung set scrollTop raw. :contentReference[oaicite:5]{index=5}
   Prism.highlightAll();
+
+  // Scroll setelah layout & paint settle
+  scrollToBottom({ force: true });
+}
+
+function setupScrollHardener() {
+  // Hindari double-attach
+  if (window.__scrollHardenerAttached) return;
+  window.__scrollHardenerAttached = true;
+
+  const chatRoot = document.getElementById('chat-log');
+  const scroller = (typeof getChatScroller === 'function')
+    ? getChatScroller()
+    : chatRoot;
+
+  if (!chatRoot || !scroller) return;
+
+  let autoStick = true;
+  const nearBottom = () =>
+    (scroller.scrollTop + scroller.clientHeight) >= (scroller.scrollHeight - 48);
+
+  // Track preferensi user: kalau dia scroll up, kita stop auto-stick
+  scroller.addEventListener('scroll', () => {
+    autoStick = nearBottom();
+  }, { passive: true });
+
+  // Reflow global (resize/font/viewport) → jaga tetap nempel bila user memang di bawah
+  const ro = new ResizeObserver(() => {
+    if (autoStick) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+      }));
+    }
+  });
+  ro.observe(scroller);
+
+  // Mutasi DOM dalam chat (stream, Prism, expand/collapse, dsb)
+  const mo = new MutationObserver((mutations) => {
+    // Hook image load di node baru (tinggi berubah setelah img render)
+    for (const m of mutations) {
+      if (m.type === 'childList' && m.addedNodes && m.addedNodes.length) {
+        m.addedNodes.forEach(n => {
+          if (n.nodeType === 1 && n.querySelectorAll) {
+            n.querySelectorAll('img').forEach(img => {
+              if (!img.complete) {
+                img.addEventListener('load', () => {
+                  if (autoStick) {
+                    requestAnimationFrame(() => requestAnimationFrame(() => {
+                      scroller.scrollTop = scroller.scrollHeight;
+                    }));
+                  }
+                }, { once: true });
+              }
+            });
+          }
+        });
+      }
+    }
+
+    if (autoStick) {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        scroller.scrollTop = scroller.scrollHeight;
+      }));
+    }
+  });
+
+  mo.observe(chatRoot, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style']
+  });
+
+  // Stabilizer tambahan (biar browser bantu “nempel”)
+  try { document.documentElement.style.setProperty('overflow-anchor', 'auto'); } catch {}
+
+  // Simpan teardown kalau nanti perlu unmount
+  window.__scrollHardenerTeardown = () => {
+    try { ro.disconnect(); } catch {}
+    try { mo.disconnect(); } catch {}
+    try { scroller.removeEventListener('scroll', () => {}); } catch {}
+    window.__scrollHardenerAttached = false;
+  };
 }
 
 function setCurrent(s){ 
@@ -430,8 +643,8 @@ function setCurrent(s){
   ensureSeed(current); 
   $('.chat-area').classList.remove('welcome-active');
   renderSessions(); 
-  renderHistory(); 
-  updateInputState(); 
+  renderHistory();
+  updateInputState();
 }
 
 // --- Data Management & Actions ---
@@ -450,6 +663,7 @@ async function load(){
     state.sessions.push(s); 
   }
 
+  const idx = Math.floor(Math.random() * welcomeMessages.length);
   state.sessions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   applyTheme(state.settings.theme || 'light');
@@ -457,6 +671,10 @@ async function load(){
   loadedSessionCount = SESSIONS_PER_PAGE;
   renderSessions();
   showWelcomeScreen();
+  
+  const welcomeElement = document.getElementById("welcome-message");
+  typewriterEffect(welcomeElement, welcomeMessages[idx]);
+  
   await save();
   st("load executed!")
 
@@ -480,52 +698,75 @@ function updateInputState(){
   $('#send').disabled = disabled;
 }
 
-async function send(){
-  const input = $('#msg'); 
+async function send() {
+  const input = $('#msg');
   const text = (input.value || '').trim();
   if (!text || isStreaming || !current) return;
-  
-  isStreaming = true; 
+
+  isStreaming = true;
   updateInputState();
 
   current.messages.push(['user', text]);
-  addMessage('user', text, {final: true});
+  addMessage('user', text, { final: true });
   input.value = '';
   input.style.height = 'auto';
   await save();
 
-  const aiMessageNode = addMessage('ai', '', {final: false});
+  const aiMessageNode = addMessage('ai', '', { final: false });
   const contentDiv = aiMessageNode.querySelector('.message-text');
   let fullResponse = '';
   const messages = buildMessages();
 
+  // Force scroll setelah placeholder AI muncul
+  scrollToBottom({ force: true });
+
   const streamHandler = (evt) => {
+    const scroller = getChatScroller();
+    const sticky = isNearBottom(scroller); // capture state sebelum update
+
     if (evt === null) {
+      contentDiv.innerHTML = md(fullResponse);
+      Prism.highlightAllUnder(contentDiv);
+
       current.messages.push(['ai', fullResponse]);
       current.tokens_used = (current.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
-      isStreaming = false; 
-      updateInputState(); 
+      isStreaming = false;
+      updateInputState();
       controller = null;
-      Prism.highlightAllUnder(contentDiv); 
       save();
+
+      // Pastikan finish di dasar
+      scrollToBottom({ force: true });
       return;
     }
+
     if (evt && typeof evt === 'object' && evt.error) {
       contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
-      isStreaming = false; 
+      isStreaming = false;
       updateInputState();
-      controller = null; 
+      controller = null;
+      scrollToBottom({ force: true });
       return;
     }
-    const token = String(evt); 
-    fullResponse += token; 
-    contentDiv.innerHTML = md(fullResponse);
-    throttledHighlight(contentDiv);
-    $('#chat-log').scrollTop = $('#chat-log').scrollHeight;
+
+    const token = String(evt);
+    fullResponse += token;
+
+    if (fullResponse.trim().length > 0) {
+      contentDiv.innerHTML = md(fullResponse);
+    }
+
+    if (token.includes('```') || contentDiv.querySelector('code')) {
+      // Highlight bisa ubah tinggi → scroll setelahnya
+      Prism.highlightAllUnder(contentDiv);
+    }
+
+    // Dulu: set raw setiap token. :contentReference[oaicite:6]{index=6}
+    scrollToBottom({ force: sticky });
   };
 
-  if (typeof window.api === 'undefined') { 
-      const demoResponse = "This is a simulated response in demo mode. \
+  if (typeof window.api === 'undefined') {
+    const demoResponse = "This is a simulated response in demo mode. \
 It is intentionally made longer to resemble a real API response, \
 including multiple sentences, some detailed explanation, and \
 structured formatting. In actual usage, this might contain \
@@ -533,19 +774,22 @@ JSON data, user messages, or system information depending on \
 the context of the demo. Please note that this is only a mock \
 response and does not represent real data from the backend.";
 
-      const chunks = demoResponse.split(' ');
-      let i = 0;
-      const interval = setInterval(() => {
-          if (i < chunks.length) {
-              streamHandler(chunks[i] + ' ');
-              i++;
-          } else {
-              clearInterval(interval);
-              streamHandler(null);
-          }
-      }, 100);
-  } else { controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler); }
+    const chunks = demoResponse.split(' ');
+    let i = 0;
+    const interval = setInterval(() => {
+      if (i < chunks.length) {
+        streamHandler(chunks[i] + ' ');
+        i++;
+      } else {
+        clearInterval(interval);
+        streamHandler(null);
+      }
+    }, 100);
+  } else {
+    controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
+  }
 }
+
 
 async function recoverUntitledSessions() {
   st("Recover executed!")
@@ -610,19 +854,19 @@ async function sendFromWelcome() {
   isStreaming = true;
   const tempId = `temp_${Date.now()}`;
 
-  const s = { 
+  const s = {
     name: null,
-    created_at: nowISO(), 
+    created_at: nowISO(),
     messages: [['user', text]],
-    tokens_used: 0, 
+    tokens_used: 0,
     seeded: true,
     tempId: tempId
   };
   state.sessions.unshift(s);
-  
+
   setCurrent(s);
   input.value = '';
-  const aiMessageNode = addMessage('ai', '', {final: false});
+  const aiMessageNode = addMessage('ai', '', { final: false });
 
   const suggestTitle = async () => {
     let title = 'Untitled chat';
@@ -648,35 +892,56 @@ async function sendFromWelcome() {
     }
   };
 
-
   const getChatResponse = async () => {
     const contentDiv = aiMessageNode.querySelector('.message-text');
     let fullResponse = '';
     const messages = buildMessages();
-    
+
+    // Force scroll setelah placeholder AI muncul
+    scrollToBottom({ force: true });
+
     const streamHandler = (evt) => {
-        if (evt === null) {
-            s.messages.push(['ai', fullResponse]);
-            s.tokens_used = (s.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
-            isStreaming = false;
-            updateInputState();
-            controller = null;
-            save();
-            return;
-        }
-        if (evt && typeof evt === 'object' && evt.error) {
-            contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
-            isStreaming = false;
-            updateInputState();
-            controller = null;
-            return;
-        }
-        const token = String(evt);
-        fullResponse += token;
+      const scroller = getChatScroller();
+      const sticky = isNearBottom(scroller);
+
+      if (evt === null) {
+        s.messages.push(['ai', fullResponse]);
+        s.tokens_used = (s.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
+        isStreaming = false;
+        updateInputState();
+        controller = null;
+
+        requestAnimationFrame(() => {
+          Prism.highlightAllUnder(contentDiv);
+          scrollToBottom({ force: true });
+        });
+
+        save();
+        return;
+      }
+      if (evt && typeof evt === 'object' && evt.error) {
+        contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
+        isStreaming = false;
+        updateInputState();
+        controller = null;
+        scrollToBottom({ force: true });
+        return;
+      }
+      const token = String(evt);
+      fullResponse += token;
+
+      if (fullResponse.trim().length > 0) {
         contentDiv.innerHTML = md(fullResponse);
-        $('#chat-log').scrollTop = $('#chat-log').scrollHeight;
+      }
+
+      if (token.includes('```') || contentDiv.querySelector('code')) {
+        Prism.highlightAllUnder(contentDiv);
+      }
+
+      // Dulu: raw set tiap token. :contentReference[oaicite:7]{index=7}
+      scrollToBottom({ force: sticky });
     };
-    
+
     if (typeof window.api === 'undefined') {
       const demoResponse = "This is a simulated response for your new chat. \
 It is designed to look more natural and descriptive, \
@@ -689,16 +954,16 @@ and should not be considered as real data.";
       const chunks = demoResponse.split(' ');
       let i = 0;
       const interval = setInterval(() => {
-          if (i < chunks.length) {
-              streamHandler(chunks[i] + ' ');
-              i++;
-          } else {
-              clearInterval(interval);
-              streamHandler(null);
-          }
+        if (i < chunks.length) {
+          streamHandler(chunks[i] + ' ');
+          i++;
+        } else {
+          clearInterval(interval);
+          streamHandler(null);
+        }
       }, 100);
     } else {
-        controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
+      controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
     }
   };
 
@@ -760,10 +1025,24 @@ function showConfirmationModal(title, message, onConfirm) {
 // --- Mobile Sidebar & Textarea ---
 function handleSidebarToggle() {
   if (window.innerWidth <= 768) {
-    $('#sidebar').classList.toggle('open');
+    const sidebar = $('#sidebar');
+    sidebar.classList.toggle('open');
+    
+    if (sidebar.classList.contains('open')) {
+      setTimeout(() => {
+        const closeOnClickOutside = (e) => {
+          if (!sidebar.contains(e.target) && !$('#toggle-sidebar-2').contains(e.target)) {
+            sidebar.classList.remove('open');
+            document.removeEventListener('click', closeOnClickOutside);
+          }
+        };
+        document.addEventListener('click', closeOnClickOutside);
+      }, 100);
+    }
   } else {
     collapsed = !collapsed;
-    $('#app').classList.toggle('sidebar-collapsed', collapsed);
+    const app = $('#app');
+    app.classList.toggle('sidebar-collapsed', collapsed);
   }
 }
 
@@ -900,7 +1179,7 @@ function st(message, duration = 10000) {
   if (debug_mode) { return; }
 
   const container = document.getElementById('toast-container');
-  let toast = container.querySelector('.toast-msg'); // cek apakah sudah ada toast
+  let toast = container.querySelector('.toast-msg');
 
   if (!toast) {
     toast = document.createElement('div');
@@ -920,7 +1199,6 @@ function st(message, duration = 10000) {
     container.appendChild(toast);
   }
 
-  // update pesan
   toast.textContent = message;
 
   toast.style.opacity = '0';
@@ -933,9 +1211,8 @@ function st(message, duration = 10000) {
   }, duration);
 }
 
-
 // --- Initialization ---
-async function initializeApp() { // Tambahkan async
+async function initializeApp() {
   setupEventListeners();
   setupMobileSidebar();
   setupTextareaResize();
@@ -945,4 +1222,7 @@ async function initializeApp() { // Tambahkan async
   renameNullTitleSessions();
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+  setupScrollHardener();
+}, { once: true });
 document.addEventListener('DOMContentLoaded', initializeApp);

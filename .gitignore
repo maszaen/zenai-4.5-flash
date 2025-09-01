@@ -7,9 +7,7 @@ dist/
 build/
 out/
 
-
 .vscode/
-
 
 .env
 .env.local
@@ -17,17 +15,13 @@ out/
 .env.test.local
 .env.production.local
 
-
 .DS_Store
 Thumbs.db
-
 
 electron-packager-output/
 release/
 
-
 coverage/
-
 
 *.log
 *.tmp
