@@ -5,6 +5,7 @@ const fs = require('fs');
 const https = require('https');
 
 function createWindow(){
+  console.log('Data disimpan di:', path.join(app.getPath('userData'), 'chat_data.json'));
   const win = new BrowserWindow({
     width: 1200, height: 800,
     frame: false,

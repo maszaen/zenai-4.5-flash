@@ -6,10 +6,12 @@ let current = null;
 let isStreaming = false;
 let controller = null;
 let collapsed = false;
+const _thinkingTimers = new WeakMap();
 
 const SESSIONS_PER_PAGE = 30;
 let loadedSessionCount = 0;
 let isAdvancedSearch = false;
+let thinkingTimer = null;
 const debug_mode = (typeof window.api !== 'undefined');
 
 function showWelcomeScreen() {
@@ -49,19 +51,16 @@ const welcomeMessages = [
   "How can I help right now?"
 ];
 
-// Helper baru: cari elemen scroller chat yang bener
 function getChatScroller() {
   const log = document.getElementById('chat-log');
   if (!log) return null;
 
-  // Kalau #chat-log sendiri scrollable, pakai itu
   const style = getComputedStyle(log);
   const overY = style.overflowY;
   if (log.scrollHeight > log.clientHeight && (overY === 'auto' || overY === 'scroll')) {
     return log;
   }
 
-  // Fallback: cari parent yang scrollable
   let el = log.parentElement;
   while (el && el !== document.body) {
     const st = getComputedStyle(el);
@@ -72,17 +71,48 @@ function getChatScroller() {
     el = el.parentElement;
   }
 
-  // Last resort: tetap pakai #chat-log
   return log;
 }
 
-// Helper baru: cek apakah user masih "nempel" bawah (threshold px)
+
+
+function scheduleThinkingText(aiNode, { shortDelay = 500, longDelay = 2000 } = {}) {
+  cancelThinkingText(aiNode);
+
+  const textEl = aiNode.querySelector('.thinking-text');
+  if (!textEl) return;
+
+  const shortId = setTimeout(() => {
+    const currentTextEl = aiNode.querySelector('.thinking-text');
+    if (currentTextEl) {
+      currentTextEl.textContent = 'Thinking...';
+    }
+  }, shortDelay);
+
+  const longId = setTimeout(() => {
+    const currentTextEl = aiNode.querySelector('.thinking-text');
+    if (currentTextEl) {
+      currentTextEl.textContent = 'Thinking longer for better response...';
+    }
+  }, longDelay);
+
+  _thinkingTimers.set(aiNode, { shortId, longId });
+}
+
+function cancelThinkingText(aiNode) {
+  const t = _thinkingTimers.get(aiNode);
+  if (t) {
+    clearTimeout(t.shortId);
+    clearTimeout(t.longId);
+  }
+  _thinkingTimers.delete(aiNode);
+}
+
 function isNearBottom(el, threshold = 48) {
   if (!el) return true;
   return (el.scrollTop + el.clientHeight) >= (el.scrollHeight - threshold);
 }
 
-// Helper baru: scroll ke bawah dengan rAF ganda biar nunggu layout+highlight selesai
 function scrollToBottom({ force = false } = {}) {
   const scroller = getChatScroller();
   if (!scroller) return;
@@ -132,6 +162,33 @@ function esc(s) {
     .replaceAll("'", '&#39;');
 }
 
+function attachCodeBlockCopyListeners(container) {
+  const copyButtons = container.querySelectorAll('.copy-code-btn');
+  const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+  const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+
+  copyButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const container = btn.closest('.code-block-container-parent');
+      const codeElement = container.querySelector('code');
+      if (codeElement) {
+        navigator.clipboard.writeText(codeElement.textContent).then(() => {
+          const originalText = btn.querySelector('span').textContent;
+          btn.innerHTML = `${checkIconSVG} <span>Copied!</span>`;
+          btn.classList.add('copied');
+          setTimeout(() => {
+            btn.innerHTML = `${copyIconSVG} <span>${originalText}</span>`;
+            btn.classList.remove('copied');
+          }, 2000);
+        }).catch(err => {
+          btn.querySelector('span').textContent = 'Failed!';
+          console.error('Failed to copy text: ', err);
+        });
+      }
+    });
+  });
+}
+
 function enhancedMarkdownParse(src) {
     let sanitizedSrc = src.trimStart();
 
@@ -145,12 +202,26 @@ function enhancedMarkdownParse(src) {
         const placeholder = `\n__CODEBLOCK_${codeBlocks.length}__\n`;
         const isComplete = match.endsWith('```');
         const codeContent = code.trim();
+        const language = lang || 'text';
+
+        // Struktur HTML baru dengan header
+        const newStructure = `
+          <div>
+            <div class="code-block-container">
+              <div class="code-block-header">
+                <span class="language-name">${language}</span>
+                <button class="copy-code-btn" title="Copy code">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                  <span>Copy</span>
+                </button>
+              </div>
+              <pre><code class="language-${language}">${esc(codeContent)}</code></pre>
+            </div>
+          </div>
+        `;
         
-        if (isComplete) {
-            codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(codeContent)}</code></pre>`);
-        } else {
-            codeBlocks.push(`<pre><code class="language-${lang || 'text'}">${esc(codeContent)}</code></pre>`);
-        }
+        codeBlocks.push(newStructure);
+        
         return placeholder;
     });
 
@@ -227,16 +298,10 @@ function enhancedMarkdownParse(src) {
             const content = olMatch ? listMatch[3] : ulMatch[2];
             const lastList = listStack.length > 0 ? listStack[listStack.length - 1] : null;
             
-            // --- [PERBAIKAN LOGIKA IMPLISIT] ---
-            // Cek apakah kita harus melanjutkan sebuah list implisit yang sudah ada.
             if (type === 'ul' && lastList && lastList.type === 'ul' && lastList.implicit && indent < lastList.indent) {
-                // Jika ya, paksa indentasi item ini agar sama dengan level list implisit.
-                // Ini mencegah parser menutup list karena dianggap de-indentasi.
                 indent = lastList.indent;
             
-            // Cek apakah kita harus memulai sebuah list implisit baru.
             } else if (type === 'ul' && lastList && lastList.type === 'ol' && indent <= lastList.indent) {
-                // Naikkan indentasi secara virtual untuk memaksa nesting.
                 indent = lastList.indent + 2;
             }
 
@@ -294,6 +359,7 @@ function enhancedMarkdownParse(src) {
 
     return finalHtml;
 }
+
 function parseInlineMarkdown(text) {
     if (!text) return '';
 
@@ -335,6 +401,7 @@ function parseInlineMarkdown(text) {
     return html;
 }
 
+
 function md(src) {
   if (!src) return '';
   const cleanSrc = src.trim();
@@ -345,7 +412,6 @@ function md(src) {
 function typewriterEffect(element, text, { speed = 30, punctuationDelay = 350 } = {}) {
   element.textContent = '';
   let i = 0;
-  // Kumpulan karakter yang akan memicu jeda tambahan
   const punctuation = '.,?!;:-–';
 
   function type() {
@@ -354,10 +420,8 @@ function typewriterEffect(element, text, { speed = 30, punctuationDelay = 350 } 
       element.textContent += char;
       i++;
 
-      // Tentukan durasi jeda untuk karakter berikutnya
       let delay = speed + Math.random() * 40;
 
-      // Jika karakter yang baru saja diketik adalah tanda baca, tambahkan jeda ekstra
       if (punctuation.includes(char)) {
         delay += punctuationDelay;
       }
@@ -366,9 +430,14 @@ function typewriterEffect(element, text, { speed = 30, punctuationDelay = 350 } 
     }
   }
   
-  // Jeda awal sebelum mulai mengetik
   setTimeout(type, 100);
 }
+
+// --- Thinking UX: scoped per message ---
+const thinkingTimers = new WeakMap();
+
+
+
 
 // --- App Logic ---
 function ensureSeed(s){
@@ -480,28 +549,45 @@ function updateChatHeader() {
   }
 }
 
-function addMessage(role, content, {final=false}={}) {
+function addMessage(role, content, { final = false } = {}) {
   const log = $('#chat-log');
   const node = document.createElement('div');
   node.className = `message ${role}`;
 
-  const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
-  const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+  const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+  const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+  const editIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+  const regenIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>`;
 
-  const copyButtonHTML = `
-    <div class="message-actions">
-      <button class="copy-btn" title="Copy text">
-        ${copyIconSVG}
-      </button>
-    </div>
-  `;
+  const baseActions = `<div class="message-actions"></div>`;
 
   if (role === 'user') {
-    node.innerHTML = `<div class="message-row"><div class="message-content"><div class="message-text">${formatUserMessage(content)}</div>${copyButtonHTML}</div></div>`;
+    node.innerHTML = `
+      <div class="message-row">
+        <div class="message-content">
+          <div class="message-text">${formatUserMessage(content)}</div>
+          ${baseActions}
+        </div>
+      </div>`;
   } else {
     const aiAvatar = `<div class="ai-avatar"><img src="../public/images/logo-chat.svg" alt="ZenAI Logo"></div>`;
-    const thinkingIndicator = `<div class="typing-indicator"><span></span><span></span><span></span></div>`;
-    node.innerHTML = `<div class="message-row">${aiAvatar}<div class="message-content"><div class="message-text">${final ? md(content) : thinkingIndicator}</div>${final ? copyButtonHTML : ''}</div></div>`;
+    // teks thinking sudah ada dari awal, disembunyikan => align sejajar sama loader
+    const thinking = `
+      <div class="thinking-container">
+        <div class="typing-indicator">
+          <span></span><span></span><span></span>
+        </div>
+        <span class="thinking-text"></span>
+      </div>`;
+
+    node.innerHTML = `
+      <div class="message-row">
+        ${aiAvatar}
+        <div class="message-content">
+          <div class="message-text">${final ? md(content) : thinking}</div>
+          ${baseActions}
+        </div>
+      </div>`;
 
     if (role === 'ai') {
       node.style.opacity = '0';
@@ -519,46 +605,187 @@ function addMessage(role, content, {final=false}={}) {
     });
   }
 
-  const copyBtn = node.querySelector('.copy-btn');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(content).then(() => {
-        copyBtn.innerHTML = checkIconSVG;
-        copyBtn.style.color = 'var(--success)';
-        setTimeout(() => {
-          copyBtn.innerHTML = copyIconSVG;
-          copyBtn.style.color = 'var(--fg-muted)';
-        }, 1500);
-      }).catch(err => {
-        console.error('Failed to copy text: ', err);
+  const actions = node.querySelector('.message-actions');
+  if (actions) {
+    const renderCopy = () => {
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.title = 'Copy text';
+      btn.innerHTML = copyIconSVG;
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(content).then(() => {
+          btn.innerHTML = checkIconSVG;
+          btn.style.color = 'var(--success)';
+          setTimeout(() => { btn.innerHTML = copyIconSVG; btn.style.color = 'var(--fg-muted)'; }, 1500);
+        }).catch(err => console.error('Failed to copy text: ', err));
       });
-    });
+      actions.appendChild(btn);
+    };
+
+    if (role === 'user') {
+      renderCopy();
+      const editBtn = document.createElement('button');
+      editBtn.className = 'edit-btn';
+      editBtn.title = 'Edit prompt';
+      editBtn.innerHTML = editIconSVG;
+      editBtn.addEventListener('click', () => {
+        if (isStreaming) { st('Tunggu respon selesai sebelum mengedit.'); return; }
+        const input = $('#msg');
+        input.value = content;
+        input.style.height = 'auto';
+        input.style.height = `${Math.min(input.scrollHeight, 350)}px`;
+        input.focus();
+        scrollToBottom({ force: true });
+      });
+      actions.appendChild(editBtn);
+    } else if (role === 'ai' && final) {
+      renderCopy();
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'regen-btn';
+      regenBtn.title = 'Regenerate this response (append new at bottom)';
+      regenBtn.innerHTML = regenIconSVG;
+      regenBtn.addEventListener('click', () => {
+        if (isStreaming) { st('Sedang streaming. Coba lagi setelah selesai.'); return; }
+        const idx = parseInt(node.dataset.index || '-1', 10);
+        if (Number.isInteger(idx) && idx >= 0) {
+          regenerateFromIndex(idx);
+        }
+      });
+      actions.appendChild(regenBtn);
+    }
   }
 
-  // Dulu: log.scrollTop = log.scrollHeight (raw) :contentReference[oaicite:4]{index=4}
   scrollToBottom({ force: true });
   return node;
 }
 
 
+
 function clearLog(){ $('#chat-log').innerHTML=''; }
+
 function renderHistory() {
   clearLog();
   if (!current || !current.messages) return;
 
-  current.messages.forEach(([role, content]) => {
-    addMessage(role, content, { final: true });
-  });
+  for (let i = 0; i < current.messages.length; i++) {
+    const [role, content] = current.messages[i];
+    const n = addMessage(role, content, { final: true });
+    n.dataset.index = String(i);
+  }
 
-  // Dulu: Prism.highlightAll(); lalu langsung set scrollTop raw. :contentReference[oaicite:5]{index=5}
   Prism.highlightAll();
-
-  // Scroll setelah layout & paint settle
+  attachCodeBlockCopyListeners($('#chat-log'));
   scrollToBottom({ force: true });
 }
 
+function buildMessagesUpTo(indexInclusive) {
+  const msgs = [{ role: 'system', content: personaSystem() }];
+  if (!current || !current.messages) return msgs;
+  const upto = Math.max(0, Math.min(indexInclusive, current.messages.length - 1));
+  for (let i = 0; i <= upto; i++) {
+    const [role, content] = current.messages[i];
+    if (role === 'user') msgs.push({ role: 'user', content });
+    if (role === 'ai')   msgs.push({ role: 'assistant', content });
+  }
+  return msgs;
+}
+
+async function regenerateFromIndex(aiIndex) {
+  if (!current || isStreaming) return;
+  if (current.messages[aiIndex]?.[0] !== 'ai') { st('Target regen bukan AI response.'); return; }
+
+  isStreaming = true;
+  updateInputState();
+
+  const aiNode = addMessage('ai', '', { final: false });
+
+  scheduleThinkingText(aiNode, { shortDelay: 1000, longDelay: 3000 });
+
+  const contentDiv = aiNode.querySelector('.message-text');
+  let fullResponse = '';
+
+  const messages = buildMessagesUpTo(aiIndex);
+
+  const streamHandler = (evt) => {
+    cancelThinkingText(aiNode);
+
+    if (evt === null) {
+      contentDiv.innerHTML = md(fullResponse);
+      Prism.highlightAllUnder(contentDiv);
+      attachCodeBlockCopyListeners(contentDiv);
+
+      current.messages.push(['ai', fullResponse]);
+      const newIndex = current.messages.length - 1;
+      aiNode.dataset.index = String(newIndex);
+
+      const actions = aiNode.querySelector('.message-actions');
+      if (actions) actions.innerHTML = ''; 
+      
+      const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+      const regenIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>`;
+      const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.title = 'Copy text';
+      copyBtn.innerHTML = copyIconSVG;
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(fullResponse).then(() => {
+          copyBtn.innerHTML = checkIconSVG;
+          copyBtn.style.color = 'var(--success)';
+          setTimeout(() => { copyBtn.innerHTML = copyIconSVG; copyBtn.style.color = 'var(--fg-muted)'; }, 1500);
+        });
+      });
+      actions.appendChild(copyBtn);
+
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'regen-btn';
+      regenBtn.title = 'Regenerate this response (append new at bottom)';
+      regenBtn.innerHTML = regenIconSVG;
+      regenBtn.addEventListener('click', () => {
+        if (!isStreaming) regenerateFromIndex(newIndex);
+      });
+      actions.appendChild(regenBtn);
+
+      current.tokens_used = (current.tokens_used || 0) + estimateTokens(fullResponse);
+      isStreaming = false;
+      updateInputState();
+      controller = null;
+      save();
+      scrollToBottom({ force: true });
+      return;
+    }
+
+    if (evt && typeof evt === 'object' && evt.error) {
+      contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
+      isStreaming = false;
+      updateInputState();
+      controller = null;
+      scrollToBottom({ force: true });
+      return;
+    }
+
+    const token = String(evt);
+    fullResponse += token;
+    if (fullResponse.trim().length > 0) contentDiv.innerHTML = md(fullResponse);
+    if (token.includes('```') || contentDiv.querySelector('code')) Prism.highlightAllUnder(contentDiv);
+    scrollToBottom();
+  };
+
+  if (typeof window.api === 'undefined') {
+    const demoResponse = "Regenerated response (demo mode). This block simulates a fresh answer based on truncated history.";
+    const chunks = demoResponse.split(' ');
+    let i = 0;
+    const interval = setInterval(() => {
+      if (i < chunks.length) { streamHandler(chunks[i] + ' '); i++; }
+      else { clearInterval(interval); streamHandler(null); }
+    }, 80);
+  } else {
+    controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
+  }
+}
+
 function setupScrollHardener() {
-  // Hindari double-attach
   if (window.__scrollHardenerAttached) return;
   window.__scrollHardenerAttached = true;
 
@@ -573,12 +800,10 @@ function setupScrollHardener() {
   const nearBottom = () =>
     (scroller.scrollTop + scroller.clientHeight) >= (scroller.scrollHeight - 48);
 
-  // Track preferensi user: kalau dia scroll up, kita stop auto-stick
   scroller.addEventListener('scroll', () => {
     autoStick = nearBottom();
   }, { passive: true });
 
-  // Reflow global (resize/font/viewport) → jaga tetap nempel bila user memang di bawah
   const ro = new ResizeObserver(() => {
     if (autoStick) {
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -588,9 +813,7 @@ function setupScrollHardener() {
   });
   ro.observe(scroller);
 
-  // Mutasi DOM dalam chat (stream, Prism, expand/collapse, dsb)
   const mo = new MutationObserver((mutations) => {
-    // Hook image load di node baru (tinggi berubah setelah img render)
     for (const m of mutations) {
       if (m.type === 'childList' && m.addedNodes && m.addedNodes.length) {
         m.addedNodes.forEach(n => {
@@ -625,10 +848,8 @@ function setupScrollHardener() {
     attributeFilter: ['class', 'style']
   });
 
-  // Stabilizer tambahan (biar browser bantu “nempel”)
   try { document.documentElement.style.setProperty('overflow-anchor', 'auto'); } catch {}
 
-  // Simpan teardown kalau nanti perlu unmount
   window.__scrollHardenerTeardown = () => {
     try { ro.disconnect(); } catch {}
     try { mo.disconnect(); } catch {}
@@ -698,52 +919,87 @@ function updateInputState(){
   $('#send').disabled = disabled;
 }
 
-async function send() {
-  const input = $('#msg');
+async function send(){
+  const input = $('#msg'); 
   const text = (input.value || '').trim();
   if (!text || isStreaming || !current) return;
-
-  isStreaming = true;
+  
+  isStreaming = true; 
   updateInputState();
 
   current.messages.push(['user', text]);
-  addMessage('user', text, { final: true });
+  const userNode = addMessage('user', text, { final: true });
+  userNode.dataset.index = String(current.messages.length - 1);
+
   input.value = '';
   input.style.height = 'auto';
   await save();
 
-  const aiMessageNode = addMessage('ai', '', { final: false });
-  const contentDiv = aiMessageNode.querySelector('.message-text');
+  const aiNode = addMessage('ai', '', { final: false });
+
+  // ⬇️ tampilkan teks thinking secara progresif (loader tidak diubah)
+  scheduleThinkingText(aiNode, { shortDelay: 1000, longDelay: 3000 });
+
+  const contentDiv = aiNode.querySelector('.message-text');
   let fullResponse = '';
   const messages = buildMessages();
 
-  // Force scroll setelah placeholder AI muncul
   scrollToBottom({ force: true });
 
   const streamHandler = (evt) => {
-    const scroller = getChatScroller();
-    const sticky = isNearBottom(scroller); // capture state sebelum update
+    // apapun eventnya, bersihkan indikator teks (biar gak nyangkut)
+    cancelThinkingText(aiNode);
 
     if (evt === null) {
       contentDiv.innerHTML = md(fullResponse);
       Prism.highlightAllUnder(contentDiv);
+      attachCodeBlockCopyListeners(contentDiv);
 
       current.messages.push(['ai', fullResponse]);
+      const aiIndex = current.messages.length - 1;
+      aiNode.dataset.index = String(aiIndex);
+
+      const actions = aiNode.querySelector('.message-actions');
+      if (actions) actions.innerHTML = '';
+      const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+      const regenIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>`;
+      const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'copy-btn';
+      copyBtn.title = 'Copy text';
+      copyBtn.innerHTML = copyIconSVG;
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(fullResponse).then(() => {
+          copyBtn.innerHTML = checkIconSVG;
+          copyBtn.style.color = 'var(--success)';
+          setTimeout(() => { copyBtn.innerHTML = copyIconSVG; copyBtn.style.color = 'var(--fg-muted)'; }, 1500);
+        });
+      });
+      actions.appendChild(copyBtn);
+
+      const regenBtn = document.createElement('button');
+      regenBtn.className = 'regen-btn';
+      regenBtn.title = 'Regenerate this response (append new at bottom)';
+      regenBtn.innerHTML = regenIconSVG;
+      regenBtn.addEventListener('click', () => {
+        if (!isStreaming) regenerateFromIndex(aiIndex);
+      });
+      actions.appendChild(regenBtn);
+
       current.tokens_used = (current.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
-      isStreaming = false;
-      updateInputState();
+      isStreaming = false; 
+      updateInputState(); 
       controller = null;
       save();
-
-      // Pastikan finish di dasar
       scrollToBottom({ force: true });
       return;
     }
-
+    
     if (evt && typeof evt === 'object' && evt.error) {
       contentDiv.innerHTML = `<span style="color:var(--danger)">[Error] ${esc(evt.error)}</span>`;
-      isStreaming = false;
-      updateInputState();
+      isStreaming = false; 
+      updateInputState(); 
       controller = null;
       scrollToBottom({ force: true });
       return;
@@ -751,44 +1007,24 @@ async function send() {
 
     const token = String(evt);
     fullResponse += token;
-
-    if (fullResponse.trim().length > 0) {
-      contentDiv.innerHTML = md(fullResponse);
-    }
-
-    if (token.includes('```') || contentDiv.querySelector('code')) {
-      // Highlight bisa ubah tinggi → scroll setelahnya
-      Prism.highlightAllUnder(contentDiv);
-    }
-
-    // Dulu: set raw setiap token. :contentReference[oaicite:6]{index=6}
-    scrollToBottom({ force: sticky });
+    if (fullResponse.trim().length > 0) contentDiv.innerHTML = md(fullResponse);
+    if (token.includes('```') || contentDiv.querySelector('code')) Prism.highlightAllUnder(contentDiv);
+    scrollToBottom();
   };
 
   if (typeof window.api === 'undefined') {
-    const demoResponse = "This is a simulated response in demo mode. \
-It is intentionally made longer to resemble a real API response, \
-including multiple sentences, some detailed explanation, and \
-structured formatting. In actual usage, this might contain \
-JSON data, user messages, or system information depending on \
-the context of the demo. Please note that this is only a mock \
-response and does not represent real data from the backend.";
-
+    const demoResponse = "This is a simulated response in demo mode. It is intentionally made longer to resemble a real API response, including multiple sentences, some detailed explanation, and structured formatting.";
     const chunks = demoResponse.split(' ');
     let i = 0;
     const interval = setInterval(() => {
-      if (i < chunks.length) {
-        streamHandler(chunks[i] + ' ');
-        i++;
-      } else {
-        clearInterval(interval);
-        streamHandler(null);
-      }
+        if (i < chunks.length) { streamHandler(chunks[i] + ' '); i++; }
+        else { clearInterval(interval); streamHandler(null); }
     }, 100);
-  } else {
-    controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
+  } else { 
+    controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler); 
   }
 }
+
 
 
 async function recoverUntitledSessions() {
@@ -854,19 +1090,24 @@ async function sendFromWelcome() {
   isStreaming = true;
   const tempId = `temp_${Date.now()}`;
 
-  const s = {
+  const s = { 
     name: null,
-    created_at: nowISO(),
+    created_at: nowISO(), 
     messages: [['user', text]],
-    tokens_used: 0,
+    tokens_used: 0, 
     seeded: true,
     tempId: tempId
   };
   state.sessions.unshift(s);
-
+  
   setCurrent(s);
   input.value = '';
-  const aiMessageNode = addMessage('ai', '', { final: false });
+
+  // Placeholder AI
+  const aiNode = addMessage('ai', '', { final: false });
+
+  // ⬇️ progresif
+  scheduleThinkingText(aiNode, { shortDelay: 1000, longDelay: 3000 });
 
   const suggestTitle = async () => {
     let title = 'Untitled chat';
@@ -893,30 +1134,60 @@ async function sendFromWelcome() {
   };
 
   const getChatResponse = async () => {
-    const contentDiv = aiMessageNode.querySelector('.message-text');
+    const contentDiv = aiNode.querySelector('.message-text');
     let fullResponse = '';
     const messages = buildMessages();
 
-    // Force scroll setelah placeholder AI muncul
     scrollToBottom({ force: true });
 
     const streamHandler = (evt) => {
-      const scroller = getChatScroller();
-      const sticky = isNearBottom(scroller);
+      cancelThinkingText(aiNode);
 
       if (evt === null) {
         s.messages.push(['ai', fullResponse]);
+        const aiIndex = s.messages.length - 1;
+        aiNode.dataset.index = String(aiIndex);
+
+        contentDiv.innerHTML = md(fullResponse);
+        Prism.highlightAllUnder(contentDiv);
+        attachCodeBlockCopyListeners(contentDiv);
+
+        // actions untuk AI final
+        const actions = aiNode.querySelector('.message-actions');
+        if (actions) actions.innerHTML = '';
+        const copyIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
+        const regenIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>`;
+        const checkIconSVG = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`;
+
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.title = 'Copy text';
+        copyBtn.innerHTML = copyIconSVG;
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(fullResponse).then(() => {
+            copyBtn.innerHTML = checkIconSVG;
+            copyBtn.style.color = 'var(--success)';
+            setTimeout(() => { copyBtn.innerHTML = copyIconSVG; copyBtn.style.color = 'var(--fg-muted)'; }, 1500);
+          });
+        });
+        actions.appendChild(copyBtn);
+
+        const regenBtn = document.createElement('button');
+        regenBtn.className = 'regen-btn';
+        regenBtn.title = 'Regenerate this response (append new at bottom)';
+        regenBtn.innerHTML = regenIconSVG;
+        regenBtn.addEventListener('click', () => {
+          if (!isStreaming) regenerateFromIndex(aiIndex);
+        });
+        actions.appendChild(regenBtn);
+
         s.tokens_used = (s.tokens_used || 0) + estimateTokens(text) + estimateTokens(fullResponse);
         isStreaming = false;
         updateInputState();
         controller = null;
 
-        requestAnimationFrame(() => {
-          Prism.highlightAllUnder(contentDiv);
-          scrollToBottom({ force: true });
-        });
-
         save();
+        scrollToBottom({ force: true });
         return;
       }
       if (evt && typeof evt === 'object' && evt.error) {
@@ -930,37 +1201,18 @@ async function sendFromWelcome() {
       const token = String(evt);
       fullResponse += token;
 
-      if (fullResponse.trim().length > 0) {
-        contentDiv.innerHTML = md(fullResponse);
-      }
-
-      if (token.includes('```') || contentDiv.querySelector('code')) {
-        Prism.highlightAllUnder(contentDiv);
-      }
-
-      // Dulu: raw set tiap token. :contentReference[oaicite:7]{index=7}
-      scrollToBottom({ force: sticky });
+      if (fullResponse.trim().length > 0) contentDiv.innerHTML = md(fullResponse);
+      if (token.includes('```') || contentDiv.querySelector('code')) Prism.highlightAllUnder(contentDiv);
+      scrollToBottom();
     };
 
     if (typeof window.api === 'undefined') {
-      const demoResponse = "This is a simulated response for your new chat. \
-It is designed to look more natural and descriptive, \
-providing multiple sentences that mimic a real backend response. \
-In an actual application, this text could represent JSON data, \
-API messages, or detailed information sent from the server. \
-Remember, this is only a mock response used for demo purposes, \
-and should not be considered as real data.";
-
+      const demoResponse = "This is a simulated response for your new chat. It is designed to look more natural and descriptive, providing multiple sentences that mimic a real backend response.";
       const chunks = demoResponse.split(' ');
       let i = 0;
       const interval = setInterval(() => {
-        if (i < chunks.length) {
-          streamHandler(chunks[i] + ' ');
-          i++;
-        } else {
-          clearInterval(interval);
-          streamHandler(null);
-        }
+        if (i < chunks.length) { streamHandler(chunks[i] + ' '); i++; }
+        else { clearInterval(interval); streamHandler(null); }
       }, 100);
     } else {
       controller = window.api.chat.stream(messages, 'glm-4.5-flash', streamHandler);
@@ -970,6 +1222,8 @@ and should not be considered as real data.";
   suggestTitle();
   getChatResponse();
 }
+
+
 
 async function deleteSession(sessionToDelete) {
   if (!sessionToDelete) return;
@@ -1062,7 +1316,15 @@ function setupTextareaResize() {
   const msgInput = $('#msg');
   msgInput.addEventListener('input', function() {
     this.style.height = 'auto';
-    this.style.height = `${Math.min(this.scrollHeight, 150)}px`;
+    this.style.height = `${Math.min(this.scrollHeight, 350)}px`;
+  });
+}
+
+function setupTextareaCentralResize() {
+  const msgCentral = $('#msg-central');
+  msgCentral.addEventListener('input', function() {
+    this.style.height = 'auto';
+    this.style.height = `${Math.min(this.scrollHeight, 350)}px`;
   });
 }
 
@@ -1216,6 +1478,7 @@ async function initializeApp() {
   setupEventListeners();
   setupMobileSidebar();
   setupTextareaResize();
+  setupTextareaCentralResize();
   setupResponsiveHandlers();
   st("initialize...");
   await load();

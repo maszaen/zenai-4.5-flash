@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AI Chat</title>
   <link rel="stylesheet" href="./style.css" />
-  <link rel="stylesheet" href="../public/prism/prism.css" />
+  <!-- <link rel="stylesheet" href="../public/prism/prism.css" /> -->
 </head>
 <body class="light-theme scrollable">
   <div id="app">
@@ -144,8 +144,8 @@
           <h2 id="welcome-message"></h2>
           <div class="input-container" id="central-input-container">
             <textarea id="msg-central" placeholder="Ask anything" rows="1"></textarea>
-            <button id="send-central" title="Send message">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <button id="send-central" class="send-button" title="Send message">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="m22 2-7 20-4-9-9-4z"></path>
                 <path d="M22 2 11 13"></path>
               </svg>
@@ -156,10 +156,11 @@
       
       
       <div id="input-area">
+        <span></span>
         <div class="input-container-parent">
           <div class="input-container">
             <textarea id="msg" placeholder="Ask anything" rows="1"></textarea>
-            <button id="send" title="Send message">
+            <button id="send" class="send-button" title="Send message">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                 <path d="m22 2-7 20-4-9-9-4z"></path>
                 <path d="M22 2 11 13"></path>
@@ -225,7 +226,7 @@
         <p id="confirm-message">Are you sure you want to proceed?</p>
       </div>
       <div class="modal-actions">
-        <button id="confirm-cancel" class="secondary-btn">Cancel</button>
+        <button id="confirm-cancel" class="primary-btn">Cancel</button>
         <button id="confirm-ok" class="danger-btn">Confirm</button>
       </div>
     </div>
