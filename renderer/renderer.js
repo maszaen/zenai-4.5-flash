@@ -169,7 +169,7 @@ function attachCodeBlockCopyListeners(container) {
 
   copyButtons.forEach(btn => {
     btn.addEventListener('click', () => {
-      const container = btn.closest('.code-block-container-parent');
+      const container = btn.closest('.code-block-container');
       const codeElement = container.querySelector('code');
       if (codeElement) {
         navigator.clipboard.writeText(codeElement.textContent).then(() => {
@@ -204,9 +204,7 @@ function enhancedMarkdownParse(src) {
         const codeContent = code.trim();
         const language = lang || 'text';
 
-        // Struktur HTML baru dengan header
         const newStructure = `
-          <div>
             <div class="code-block-container">
               <div class="code-block-header">
                 <span class="language-name">${language}</span>
@@ -217,7 +215,6 @@ function enhancedMarkdownParse(src) {
               </div>
               <pre><code class="language-${language}">${esc(codeContent)}</code></pre>
             </div>
-          </div>
         `;
         
         codeBlocks.push(newStructure);

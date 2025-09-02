@@ -1850,14 +1850,16 @@ textarea:focus-visible {
 .message-text del,
 .message-text ins {
   position: relative;
-  z-index: 2 !important;
+  z-index: 999 !important;
 } */
 
+.message-text {
+  position: relative;
+}
 
-.message-text .code-block-container {
+.code-block-container {
   position: relative;
   padding-bottom: 10px;
-  z-index: -1;
 }
 
 .code-block-header {  
@@ -1873,7 +1875,7 @@ textarea:focus-visible {
   position: sticky;
   top: 12px;
 
-  box-shadow: 0 -22px 0 0 var(--bg);
+filter: drop-shadow(0 -12px 0 var(--bg));
   z-index: 3 !important;
 }
 
