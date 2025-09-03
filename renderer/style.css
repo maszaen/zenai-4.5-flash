@@ -888,7 +888,7 @@ input:checked + .slider:before {
 .chat-log-container {
   flex: 1;
   overflow-y: auto;
-  padding: 0 var(--spacing-xl);
+  padding: var(--spacing-xs) var(--spacing-xl) var(--spacing-2xl) var(--spacing-xl);
   background: var(--bg);
   scroll-behavior: smooth;
 }
@@ -1436,7 +1436,7 @@ li.bold-marker-item::marker {
 .message-text h1,
 .message-text h2,
 .message-text h3 {
-  margin: var(--spacing-lg) 0 var(--spacing-xs) 0;
+  margin: var(--spacing-lg) 0 var(--spacing-md) 0;
   font-weight: var(--font-bold);
   line-height: 1.3;
 }
@@ -1583,7 +1583,7 @@ strong {
   }
   
   #chat-log {
-    padding: var(--spacing-lg) var(--spacing-md) 0;
+    padding: var(--spacing-lg) 0 var(--spacing-xl) 0;
   }
   
   #input-area {
@@ -1857,6 +1857,10 @@ textarea:focus-visible {
   position: relative;
 }
 
+.message-text > :first-child {
+  margin-top: 0;
+}
+
 .code-block-container {
   position: relative;
   padding-bottom: 10px;
@@ -1875,7 +1879,9 @@ textarea:focus-visible {
   position: sticky;
   top: 12px;
 
-filter: drop-shadow(0 -12px 0 var(--bg));
+  filter: drop-shadow(0 -12px 0 var(--bg))    
+        drop-shadow(12px 0 0 var(--bg))     
+        drop-shadow(-12px 0 0 var(--bg));
   z-index: 3 !important;
 }
 
